@@ -1,4 +1,4 @@
-const CACHE='ewpl-campo-v2.1.0';
+const CACHE='ewpl-campo-v3.0.0';
 const APP_SHELL=[
   './',
   './index.html',
