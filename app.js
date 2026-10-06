@@ -162,7 +162,11 @@ async function cargarPizarron(){
   if(!exigeOnline())return;
   q('#pizLista').innerHTML='<div class="muted">Actualizando…</div>';
   try{
-    const r=await jsonp('dashboard'); dash=r.actividades||[];
+    const r=await jsonp('dashboard');
+    dash=(r.actividades||[]).filter(a=>{
+      const e=String(a&&a.estado||'').trim().toUpperCase();
+      return !['CERRADO','ATENDIDO','CANCELADO'].includes(e);
+    });
     pintarPizarron(); aviso('Pizarrón actualizado.');
   }catch(e){q('#pizLista').innerHTML='<div class="warn">'+esc(e.message)+'</div>'}
 }
