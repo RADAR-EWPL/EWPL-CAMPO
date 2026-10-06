@@ -78,7 +78,7 @@ async function enviar(n){
     };
 
     s.src=base+
-      '?ewplCampoConfirmar=1'+
+      '?accion=confirmar'+
       '&callback='+encodeURIComponent(cb)+
       '&token='+encodeURIComponent(t)+
       '&id='+encodeURIComponent(id)+
