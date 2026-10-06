@@ -17,7 +17,61 @@ async function guardar(){const texto=$('texto').value.trim();if(!texto)return me
 function vencida(n){return !!(n.recordatorio&&n.fecha&&n.hora&&new Date(n.fecha+'T'+n.hora).getTime()<Date.now()&&n.modoRecordatorio==='NORMAL')}
 function resolverVencida(n){return new Promise(resolve=>{const d=$('dlgVencido');$('dlgVencidoTexto').textContent=`${n.texto} · ${n.fecha} ${n.hora}`;const fin=v=>{d.close();resolve(v)};$('vReprogramar').onclick=()=>fin('REPROGRAMAR');$('vCrear').onclick=()=>fin('VENCIDO');$('vSolo').onclick=()=>fin('SOLO_ANTEFICHA');$('vCancelar').onclick=()=>fin('CANCELAR');d.showModal()})}
 async function reprogramar(n){const f=prompt('Nueva fecha (AAAA-MM-DD):',fechaLocal(new Date()));if(!f)return false;const h=prompt('Nueva hora (HH:MM):','09:00');if(!h)return false;n.fecha=f;n.hora=h;n.recordatorio=true;n.modoRecordatorio='NORMAL';await put(n);return true}
-async function enviar(n){const payload={accion:'nota',token:token(),nota:n};return new Promise((resolve,reject)=>{const rid='ewpl_'+Date.now()+'_'+Math.random().toString(36).slice(2),frame=document.createElement('iframe'),form=document.createElement('form'),campo=document.createElement('input');let fin=false;frame.name=rid;frame.style.display='none';form.method='POST';form.action=cfg().endpoint;form.target=rid;form.style.display='none';const t=document.createElement('input');t.type='hidden';t.name='ewplTransport';t.value='iframe';campo.type='hidden';campo.name='payload';campo.value=JSON.stringify(payload);form.append(t,campo);const limpiar=()=>{window.removeEventListener('message',oir);clearTimeout(timer);form.remove();frame.remove()};const terminar=(err,val)=>{if(fin)return;fin=true;limpiar();err?reject(err):resolve(val)};const oir=ev=>{if(ev.source!==frame.contentWindow)return;let j;try{j=typeof ev.data==='string'?JSON.parse(ev.data):ev.data}catch(_){return}if(!j||typeof j!=='object')return;if(j.ok===false)return terminar(new Error(j.error||'Servidor rechazó la nota'));terminar(null,j)};window.addEventListener('message',oir);document.body.append(frame,form);const timer=setTimeout(()=>terminar(new Error('Sin confirmación del servidor')),20000);form.submit()})}
+async function enviar(n){
+  return new Promise((resolve,reject)=>{
+    const token=getToken();
+    if(!token)return reject(new Error('EWPL Campo no está emparejado'));
+
+    const id=(''+(n.id||'')).replace(/[^A-Za-z0-9_]/g,'_');
+    const callback='ewplCampoCb_'+id+'_'+Date.now();
+    const script=document.createElement('script');
+    let terminado=false;
+
+    const limpiar=()=>{
+      try{delete window[callback]}catch(_){window[callback]=undefined}
+      try{script.remove()}catch(_){}
+    };
+
+    const terminar=(err,res)=>{
+      if(terminado)return;
+      terminado=true;
+      clearTimeout(timer);
+      limpiar();
+      if(err)reject(err);
+      else resolve(res);
+    };
+
+    window[callback]=(res)=>{
+      if(!res||typeof res!=='object'){
+        return terminar(new Error('Respuesta inválida del servidor'));
+      }
+      if(res.ok===false){
+        return terminar(new Error(res.error||'Servidor rechazó la nota'));
+      }
+      terminar(null,res);
+    };
+
+    const payload=encodeURIComponent(JSON.stringify(n));
+    const base=CONFIG.WEB_APP_URL.replace(/\/+$/,'');
+    script.src=
+      base+
+      '?ewplCampo=1'+
+      '&callback='+encodeURIComponent(callback)+
+      '&token='+encodeURIComponent(token)+
+      '&payload='+payload+
+      '&_='+Date.now();
+
+    script.async=true;
+    script.onerror=()=>terminar(new Error('No se pudo contactar al servidor EWPL'));
+
+    const timer=setTimeout(
+      ()=>terminar(new Error('Sin confirmación del servidor')),
+      20000
+    );
+
+    document.head.appendChild(script);
+  });
+}
 async function sincronizar(manual=false){if(syncing){if(manual)mensaje('Ya hay una sincronización en curso. Espera unos segundos.','warn');return;}if(!navigator.onLine)return mensaje('Sin Internet. Las notas permanecen guardadas.','warn');if(!configOK())return mensaje('Primero empareja EWPL Campo con el servidor.','warn');syncing=true;$('sync').disabled=true;let q=await all(),ok=0,fallos=0,cancelado=false;for(const n of q){if(vencida(n)){const a=await resolverVencida(n);if(a==='CANCELAR'){cancelado=true;break}if(a==='REPROGRAMAR'){if(!(await reprogramar(n))){cancelado=true;break}}else if(a==='VENCIDO'){n.modoRecordatorio='VENCIDO';await put(n)}else if(a==='SOLO_ANTEFICHA'){n.recordatorio=false;n.modoRecordatorio='SOLO_ANTEFICHA';await put(n)}}try{await enviar(n);await del(n.id);ok++}catch(e){n.intentos=(n.intentos||0)+1;n.ultimoError=String(e&&e.message||e);await put(n);fallos++;break}}await pintar();$('sync').disabled=false;syncing=false;if(cancelado)mensaje(`${ok} sincronizadas. Sincronización detenida por el usuario.`,'warn');else if(fallos){const q2=await all(),detalle=q2[0]&&q2[0].ultimoError?` Error: ${q2[0].ultimoError}`:'';mensaje(`${ok} sincronizadas; ${fallos} sigue pendiente. No se borró del teléfono.${detalle}`,'warn');}else if(ok)mensaje(`${ok} nota(s) confirmadas por EWPL.`,'ok');else mensaje('No hay notas pendientes.','ok')}
 function abrirParear(){$('tokenInput').value='';$('dlgParear').showModal();setTimeout(()=>$('tokenInput').focus(),50)}
 $('parear').onclick=abrirParear;$('parearCancelar').onclick=()=>$('dlgParear').close();$('parearGuardar').onclick=async()=>{const t=$('tokenInput').value.trim();if(t.length<20)return alert('El código no parece válido.');localStorage.setItem(TOKEN_KEY,t);$('dlgParear').close();await pintar();mensaje('Dispositivo emparejado.','ok');if(navigator.onLine)sincronizar()};
