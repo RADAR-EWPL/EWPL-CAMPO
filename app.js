@@ -19,7 +19,7 @@ function resolverVencida(n){return new Promise(resolve=>{const d=$('dlgVencido')
 async function reprogramar(n){const f=prompt('Nueva fecha (AAAA-MM-DD):',fechaLocal(new Date()));if(!f)return false;const h=prompt('Nueva hora (HH:MM):','09:00');if(!h)return false;n.fecha=f;n.hora=h;n.recordatorio=true;n.modoRecordatorio='NORMAL';await put(n);return true}
 async function enviar(n){
   return new Promise((resolve,reject)=>{
-    const token=getToken();
+    const token=window.localStorage.getItem(TOKEN_KEY)||'';
     if(!token)return reject(new Error('EWPL Campo no está emparejado'));
 
     const id=(''+(n.id||'')).replace(/[^A-Za-z0-9_]/g,'_');
