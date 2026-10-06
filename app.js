@@ -52,7 +52,8 @@ async function enviar(n){
     };
 
     const payload=encodeURIComponent(JSON.stringify(n));
-    const base=CONFIG.WEB_APP_URL.replace(/\/+$/,'');
+    const base=String(cfg().endpoint||'').replace(/\/+$/,'');
+    if(!base)return terminar(new Error('Endpoint EWPL no configurado'));
     script.src=
       base+
       '?ewplCampo=1'+
