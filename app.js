@@ -18,60 +18,86 @@ function vencida(n){return !!(n.recordatorio&&n.fecha&&n.hora&&new Date(n.fecha+
 function resolverVencida(n){return new Promise(resolve=>{const d=$('dlgVencido');$('dlgVencidoTexto').textContent=`${n.texto} · ${n.fecha} ${n.hora}`;const fin=v=>{d.close();resolve(v)};$('vReprogramar').onclick=()=>fin('REPROGRAMAR');$('vCrear').onclick=()=>fin('VENCIDO');$('vSolo').onclick=()=>fin('SOLO_ANTEFICHA');$('vCancelar').onclick=()=>fin('CANCELAR');d.showModal()})}
 async function reprogramar(n){const f=prompt('Nueva fecha (AAAA-MM-DD):',fechaLocal(new Date()));if(!f)return false;const h=prompt('Nueva hora (HH:MM):','09:00');if(!h)return false;n.fecha=f;n.hora=h;n.recordatorio=true;n.modoRecordatorio='NORMAL';await put(n);return true}
 async function enviar(n){
-  return new Promise((resolve,reject)=>{
-    const token=window.localStorage.getItem(TOKEN_KEY)||'';
-    if(!token)return reject(new Error('EWPL Campo no está emparejado'));
+  const token=window.localStorage.getItem(TOKEN_KEY)||'';
+  if(!token)throw new Error('EWPL Campo no está emparejado');
+  const base=String(cfg().endpoint||'').replace(/\/+$/,'');
+  if(!base)throw new Error('Endpoint EWPL no configurado');
 
-    const id=(''+(n.id||'')).replace(/[^A-Za-z0-9_]/g,'_');
-    const callback='ewplCampoCb_'+id+'_'+Date.now();
-    const script=document.createElement('script');
-    let terminado=false;
-
-    const limpiar=()=>{
-      try{delete window[callback]}catch(_){window[callback]=undefined}
-      try{script.remove()}catch(_){}
-    };
-
-    const terminar=(err,res)=>{
-      if(terminado)return;
-      terminado=true;
-      clearTimeout(timer);
-      limpiar();
-      if(err)reject(err);
-      else resolve(res);
-    };
-
-    window[callback]=(res)=>{
-      if(!res||typeof res!=='object'){
-        return terminar(new Error('Respuesta inválida del servidor'));
-      }
-      if(res.ok===false){
-        return terminar(new Error(res.error||'Servidor rechazó la nota'));
-      }
-      terminar(null,res);
-    };
-
-    const payload=encodeURIComponent(JSON.stringify(n));
-    const base=String(cfg().endpoint||'').replace(/\/+$/,'');
-    if(!base)return terminar(new Error('Endpoint EWPL no configurado'));
-    script.src=
-      base+
-      '?ewplCampo=1'+
-      '&callback='+encodeURIComponent(callback)+
-      '&token='+encodeURIComponent(token)+
-      '&payload='+payload+
-      '&_='+Date.now();
-
-    script.async=true;
-    script.onerror=()=>terminar(new Error('No se pudo contactar al servidor EWPL'));
-
-    const timer=setTimeout(
-      ()=>terminar(new Error('Sin confirmación del servidor')),
-      20000
-    );
-
-    document.head.appendChild(script);
-  });
+  // V1.7: primero intenta JSONP. Si el navegador/buscador bloquea el script
+  // externo, usa el puente POST por iframe que ya existe en EWPL_WEB.
+  try{
+    return await new Promise((resolve,reject)=>{
+      const id=(''+(n.id||'')).replace(/[^A-Za-z0-9_]/g,'_');
+      const callback='ewplCampoCb_'+id+'_'+Date.now();
+      const script=document.createElement('script');
+      let terminado=false;
+      let timer=null;
+      const limpiar=()=>{
+        try{delete window[callback]}catch(_){window[callback]=undefined}
+        try{script.remove()}catch(_){}
+      };
+      const terminar=(err,res)=>{
+        if(terminado)return;
+        terminado=true;
+        if(timer)clearTimeout(timer);
+        limpiar();
+        if(err)reject(err);else resolve(res);
+      };
+      window[callback]=(res)=>{
+        if(!res||typeof res!=='object')return terminar(new Error('Respuesta inválida del servidor'));
+        if(res.ok===false)return terminar(new Error(res.error||'Servidor rechazó la nota'));
+        terminar(null,res);
+      };
+      script.src=base+'?ewplCampo=1&callback='+encodeURIComponent(callback)+'&token='+encodeURIComponent(token)+'&payload='+encodeURIComponent(JSON.stringify(n))+'&_='+Date.now();
+      script.async=true;
+      script.onerror=()=>terminar(new Error('JSONP_NO_DISPONIBLE'));
+      timer=setTimeout(()=>terminar(new Error('JSONP_SIN_CONFIRMACION')),8000);
+      document.head.appendChild(script);
+    });
+  }catch(jsonpError){
+    return await new Promise((resolve,reject)=>{
+      const frame=document.createElement('iframe');
+      const form=document.createElement('form');
+      const nombre='ewplCampoFrame_'+Date.now()+'_'+Math.random().toString(36).slice(2);
+      let terminado=false;
+      let timer=null;
+      frame.name=nombre;
+      frame.style.display='none';
+      form.method='POST';
+      form.action=base;
+      form.target=nombre;
+      form.style.display='none';
+      const campo=(name,value)=>{const i=document.createElement('input');i.type='hidden';i.name=name;i.value=value;form.appendChild(i)};
+      campo('ewplTransport','iframe');
+      campo('token',token);
+      campo('payload',JSON.stringify({accion:'nota',token:token,nota:n}));
+      const limpiar=()=>{
+        window.removeEventListener('message',recibir);
+        try{form.remove()}catch(_){}
+        try{frame.remove()}catch(_){}
+      };
+      const terminar=(err,res)=>{
+        if(terminado)return;
+        terminado=true;
+        if(timer)clearTimeout(timer);
+        limpiar();
+        if(err)reject(err);else resolve(res);
+      };
+      const recibir=(ev)=>{
+        if(ev.source!==frame.contentWindow)return;
+        let res=ev.data;
+        try{if(typeof res==='string')res=JSON.parse(res)}catch(_){return terminar(new Error('Respuesta inválida del servidor'))}
+        if(!res||typeof res!=='object')return terminar(new Error('Respuesta inválida del servidor'));
+        if(res.ok===false)return terminar(new Error(res.error||'Servidor rechazó la nota'));
+        terminar(null,res);
+      };
+      window.addEventListener('message',recibir);
+      timer=setTimeout(()=>terminar(new Error('Sin confirmación del servidor EWPL')),20000);
+      document.body.appendChild(frame);
+      document.body.appendChild(form);
+      form.submit();
+    });
+  }
 }
 async function sincronizar(manual=false){if(syncing){if(manual)mensaje('Ya hay una sincronización en curso. Espera unos segundos.','warn');return;}if(!navigator.onLine)return mensaje('Sin Internet. Las notas permanecen guardadas.','warn');if(!configOK())return mensaje('Primero empareja EWPL Campo con el servidor.','warn');syncing=true;$('sync').disabled=true;let q=await all(),ok=0,fallos=0,cancelado=false;for(const n of q){if(vencida(n)){const a=await resolverVencida(n);if(a==='CANCELAR'){cancelado=true;break}if(a==='REPROGRAMAR'){if(!(await reprogramar(n))){cancelado=true;break}}else if(a==='VENCIDO'){n.modoRecordatorio='VENCIDO';await put(n)}else if(a==='SOLO_ANTEFICHA'){n.recordatorio=false;n.modoRecordatorio='SOLO_ANTEFICHA';await put(n)}}try{await enviar(n);await del(n.id);ok++}catch(e){n.intentos=(n.intentos||0)+1;n.ultimoError=String(e&&e.message||e);await put(n);fallos++;break}}await pintar();$('sync').disabled=false;syncing=false;if(cancelado)mensaje(`${ok} sincronizadas. Sincronización detenida por el usuario.`,'warn');else if(fallos){const q2=await all(),detalle=q2[0]&&q2[0].ultimoError?` Error: ${q2[0].ultimoError}`:'';mensaje(`${ok} sincronizadas; ${fallos} sigue pendiente. No se borró del teléfono.${detalle}`,'warn');}else if(ok)mensaje(`${ok} nota(s) confirmadas por EWPL.`,'ok');else mensaje('No hay notas pendientes.','ok')}
 function abrirParear(){$('tokenInput').value='';$('dlgParear').showModal();setTimeout(()=>$('tokenInput').focus(),50)}
